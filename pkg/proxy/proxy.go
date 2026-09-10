@@ -223,7 +223,16 @@ func (p *OAuthProxy) SetupRoutes(mux *http.ServeMux, next http.Handler) {
 	mux.HandleFunc("GET "+prefix+"/callback", p.withCORS(p.withRateLimit(callbackHandler)))
 	mux.HandleFunc("POST "+prefix+"/token", p.withCORS(p.withRateLimit(tokenHandler)))
 	mux.HandleFunc("POST "+prefix+"/revoke", p.withCORS(p.withRateLimit(revokeHandler)))
-	if !p.config.DisableClientRegistration {
+	if p.config.DisableClientRegistration {
+		// Serve an explicit 404 so clients get a deterministic error instead
+		// of /register falling through to the authenticated catch-all route.
+		mux.HandleFunc(prefix+"/register", p.withCORS(func(w http.ResponseWriter, r *http.Request) {
+			handlerutils.JSON(w, http.StatusNotFound, types.OAuthError{
+				Error:            "not_found",
+				ErrorDescription: "Client registration is disabled on this server",
+			})
+		}))
+	} else {
 		mux.HandleFunc("POST "+prefix+"/register", p.withCORS(p.withRateLimit(register.NewHandler(p.db))))
 	}
 

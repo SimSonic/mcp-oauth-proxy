@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/obot-platform/mcp-oauth-proxy/pkg/types"
@@ -499,6 +501,66 @@ func TestSpecialCharactersInHeaders(t *testing.T) {
 	assert.Equal(t, "test+tag@example.com", header.Get("X-Forwarded-Email"))
 	assert.Equal(t, "John O'Doe", header.Get("X-Forwarded-Name"))
 	assert.Equal(t, "token-with-special-chars_123", header.Get("X-Forwarded-Access-Token"))
+}
+
+// TestClientRegistrationDisabled tests that disabling client registration
+// removes the endpoint from the server metadata and makes /register
+// deterministically return 404.
+func TestClientRegistrationDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests in short mode")
+	}
+
+	newProxy := func(t *testing.T, disableRegistration bool) http.Handler {
+		t.Helper()
+		proxy, err := NewOAuthProxy(&types.Config{
+			Mode:                      ModeForwardAuth,
+			OAuthClientID:             "test_client_id",
+			OAuthClientSecret:         "test_client_secret",
+			OAuthAuthorizeURL:         "https://accounts.google.com",
+			ScopesSupported:           "openid,profile,email",
+			DisableClientRegistration: disableRegistration,
+		})
+		if err != nil {
+			t.Skipf("Skipping test due to database connection error: %v", err)
+		}
+		t.Cleanup(func() { _ = proxy.Close() })
+		return proxy.GetHandler()
+	}
+
+	getMetadata := func(t *testing.T, handler http.Handler) types.OAuthMetadata {
+		t.Helper()
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil))
+		require.Equal(t, http.StatusOK, w.Code)
+		var metadata types.OAuthMetadata
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &metadata))
+		return metadata
+	}
+
+	t.Run("RegistrationEnabledByDefault", func(t *testing.T) {
+		handler := newProxy(t, false)
+
+		metadata := getMetadata(t, handler)
+		assert.NotEmpty(t, metadata.RegistrationEndpoint)
+
+		// Route is served by the register handler; an empty payload yields a
+		// 400 (invalid client metadata), proving the route is active.
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("POST", "/register", strings.NewReader("{}")))
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("RegistrationDisabled", func(t *testing.T) {
+		handler := newProxy(t, true)
+
+		metadata := getMetadata(t, handler)
+		assert.Empty(t, metadata.RegistrationEndpoint)
+
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("POST", "/register", strings.NewReader("{}")))
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
 
 // BenchmarkSetHeaders benchmarks the header setting function
