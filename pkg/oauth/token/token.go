@@ -173,12 +173,12 @@ func (p *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Check PKCE if code_verifier is provided
-	if codeVerifier != "" {
-		if !isPkceEnabled {
+	// If the authorization request used PKCE, the code_verifier is required
+	if isPkceEnabled {
+		if codeVerifier == "" {
 			handlerutils.JSON(w, http.StatusBadRequest, types.OAuthError{
 				Error:            "invalid_request",
-				ErrorDescription: "code_verifier provided for a flow that did not use PKCE",
+				ErrorDescription: "code_verifier is required when the authorization request used PKCE",
 			})
 			return
 		}
@@ -199,6 +199,12 @@ func (p *Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Re
 			})
 			return
 		}
+	} else if codeVerifier != "" {
+		handlerutils.JSON(w, http.StatusBadRequest, types.OAuthError{
+			Error:            "invalid_request",
+			ErrorDescription: "code_verifier provided for a flow that did not use PKCE",
+		})
+		return
 	}
 
 	// Props are stored in the grant and will be accessed when needed
