@@ -28,6 +28,10 @@ type Config struct {
 	MCPPaths             []string
 	APIKeyAuthWebhookURL string
 	MCPServerID          string
+	// DisableClientRegistration turns off the RFC 7591 dynamic client
+	// registration endpoint. When set, the /register endpoint is not served
+	// and no registration_endpoint is advertised in the server metadata.
+	DisableClientRegistration bool
 }
 
 // TokenData represents stored token data for OAuth 2.1 compliance
