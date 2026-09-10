@@ -26,7 +26,7 @@ type RootCmd struct {
 	OAuthClientID     string `name:"oauth-client-id" env:"OAUTH_CLIENT_ID" usage:"OAuth client ID from your OAuth provider" required:"true"`
 	OAuthClientSecret string `name:"oauth-client-secret" env:"OAUTH_CLIENT_SECRET" usage:"OAuth client secret from your OAuth provider" required:"true"`
 	OAuthAuthorizeURL string `name:"oauth-authorize-url" env:"OAUTH_AUTHORIZE_URL" usage:"Authorization endpoint URL from your OAuth provider (e.g., https://accounts.google.com)" required:"true"`
-	OAuthJWKSURL      string `name:"oauth-jwks-url" env:"OAUTH_JWKS_URL" usage:"JWKS endpoint URL from your OAuth provider (e.g., https://accounts.google.com/.well-known/openid-configuration/jwks)"`
+	OAuthJWKSURL      string `name:"oauth-jwks-url" env:"OAUTH_JWKS_URL" usage:"JWKS endpoint URL from your OAuth provider (e.g., https://accounts.google.com/.well-known/openid-configuration/jwks). Requires trusted-issuer to be set"`
 	TrustedIssuer     string `name:"trusted-issuer" env:"TRUSTED_ISSUER" usage:"Expected issuer (iss) claim for externally issued JWT access tokens (e.g., https://accounts.google.com). Required to accept externally issued JWTs"`
 	TrustedAudiences  string `name:"trusted-audiences" env:"TRUSTED_AUDIENCES" usage:"Comma-separated list of expected audience (aud) claims for externally issued JWT access tokens"`
 
@@ -123,6 +123,9 @@ func (c *RootCmd) validateConfig() error {
 	}
 	if c.MCPServerURL == "" {
 		return fmt.Errorf("mcp-server-url is required")
+	}
+	if c.OAuthJWKSURL != "" && c.TrustedIssuer == "" {
+		return fmt.Errorf("trusted-issuer is required when oauth-jwks-url is set: without it, JWT issuer and audience validation is silently skipped and any token signed by the trusted key is accepted")
 	}
 	if c.Mode == proxy.ModeProxy {
 		if u, err := url.Parse(c.MCPServerURL); err != nil || u.Scheme != "http" && u.Scheme != "https" {
