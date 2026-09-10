@@ -1,11 +1,19 @@
 package tokens
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/obot-platform/mcp-oauth-proxy/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -322,6 +330,128 @@ func TestTokenValidationEdgeCases(t *testing.T) {
 
 		_, err := tokenManager.validateAccessToken(validToken)
 		assert.NoError(t, err) // This should work with proper type
+	})
+}
+
+// jwksTestServer serves a JWKS document for the given RSA public key.
+func jwksTestServer(t *testing.T, key *rsa.PublicKey, kid string) *httptest.Server {
+	t.Helper()
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())
+	n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+	jwks, err := json.Marshal(map[string]any{
+		"keys": []map[string]string{
+			{"kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig", "n": n, "e": e},
+		},
+	})
+	require.NoError(t, err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwks)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// signJWT creates a signed JWT with the given claims. alg must be "RS256"
+// (signed with key) or "HS256" (signed with the public key modulus bytes as
+// the HMAC secret, to assert algorithm confusion is rejected).
+func signJWT(t *testing.T, alg string, key *rsa.PrivateKey, claims map[string]any) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.GetSigningMethod(alg), jwt.MapClaims(claims))
+	token.Header["kid"] = "test-key"
+	secret := any(key)
+	if alg == "HS256" {
+		secret = key.PublicKey.N.Bytes()
+	}
+	signed, err := token.SignedString(secret)
+	require.NoError(t, err)
+	return signed
+}
+
+// TestExternalJWTValidation covers the externally issued JWT path (OAUTH_JWKS_URL):
+// signature/algorithm restrictions, required expiration, and issuer/audience checks.
+func TestExternalJWTValidation(t *testing.T) {
+	const (
+		issuer   = "https://idp.example.com"
+		audience = "mcp-proxy"
+	)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	srv := jwksTestServer(t, &key.PublicKey, "test-key")
+
+	baseClaims := func() map[string]any {
+		return map[string]any{
+			"iss": issuer,
+			"aud": audience,
+			"sub": "user-from-jwt",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}
+	}
+
+	t.Run("ValidToken", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		info, err := tm.validateAccessToken(signJWT(t, "RS256", key, baseClaims()))
+		require.NoError(t, err)
+		assert.Equal(t, "user-from-jwt", info.UserID)
+	})
+
+	t.Run("HS256Rejected", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		// HS256 signed with the known public key material must be rejected
+		// (algorithm confusion).
+		_, err = tm.validateAccessToken(signJWT(t, "HS256", key, baseClaims()))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid token format")
+	})
+
+	t.Run("MissingExpRejected", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		claims := baseClaims()
+		delete(claims, "exp")
+		_, err = tm.validateAccessToken(signJWT(t, "RS256", key, claims))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid token format")
+	})
+
+	t.Run("IssuerMismatchRejected", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		claims := baseClaims()
+		claims["iss"] = "https://evil.example.com"
+		_, err = tm.validateAccessToken(signJWT(t, "RS256", key, claims))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid token format")
+	})
+
+	t.Run("AudienceMismatchRejected", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		claims := baseClaims()
+		claims["aud"] = "someone-else"
+		_, err = tm.validateAccessToken(signJWT(t, "RS256", key, claims))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid token format")
+	})
+
+	t.Run("ExpiredRejected", func(t *testing.T) {
+		tm, err := NewTokenManagerWithJWKSURL(NewMockDatabase(), srv.URL, issuer, []string{audience})
+		require.NoError(t, err)
+
+		claims := baseClaims()
+		claims["exp"] = time.Now().Add(-time.Hour).Unix()
+		_, err = tm.validateAccessToken(signJWT(t, "RS256", key, claims))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid token format")
 	})
 }
 
