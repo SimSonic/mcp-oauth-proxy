@@ -45,6 +45,8 @@ type RootCmd struct {
 	Version bool `name:"version" usage:"Show version information"`
 
 	Mode string `name:"mode" env:"MODE" usage:"Mode to run the server in" default:"proxy"`
+
+	DisableClientRegistration bool `name:"disable-client-registration" env:"DISABLE_CLIENT_REGISTRATION" usage:"Disable the RFC 7591 dynamic client registration endpoint (/register) and stop advertising it in the server metadata"`
 }
 
 func (c *RootCmd) Run(cobraCmd *cobra.Command, args []string) error {
@@ -63,16 +65,17 @@ func (c *RootCmd) Run(cobraCmd *cobra.Command, args []string) error {
 
 	// Convert CLI config to internal config format
 	config := &types.Config{
-		DatabaseDSN:       c.DatabaseDSN,
-		OAuthClientID:     c.OAuthClientID,
-		OAuthClientSecret: c.OAuthClientSecret,
-		OAuthAuthorizeURL: c.OAuthAuthorizeURL,
-		OAuthJWKSURL:      c.OAuthJWKSURL,
-		ScopesSupported:   c.ScopesSupported,
-		MCPServerURL:      c.MCPServerURL,
-		EncryptionKey:     c.EncryptionKey,
-		Mode:              c.Mode,
-		RoutePrefix:       c.RoutePrefix,
+		DatabaseDSN:               c.DatabaseDSN,
+		OAuthClientID:             c.OAuthClientID,
+		OAuthClientSecret:         c.OAuthClientSecret,
+		OAuthAuthorizeURL:         c.OAuthAuthorizeURL,
+		OAuthJWKSURL:              c.OAuthJWKSURL,
+		ScopesSupported:           c.ScopesSupported,
+		MCPServerURL:              c.MCPServerURL,
+		EncryptionKey:             c.EncryptionKey,
+		Mode:                      c.Mode,
+		RoutePrefix:               c.RoutePrefix,
+		DisableClientRegistration: c.DisableClientRegistration,
 	}
 
 	// Validate configuration
