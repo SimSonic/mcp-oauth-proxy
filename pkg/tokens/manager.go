@@ -16,6 +16,16 @@ import (
 // ErrInvalidTokenFormat is returned when the token format is not recognized.
 var ErrInvalidTokenFormat = errors.New("invalid token format")
 
+// asymmetricSigningMethods restricts externally issued JWTs to asymmetric
+// algorithms. This prevents algorithm confusion attacks (e.g., HS256 using a
+// known public key as the HMAC secret) when validating tokens from a JWKS URL.
+var asymmetricSigningMethods = []string{
+	"RS256", "RS384", "RS512",
+	"ES256", "ES384", "ES512",
+	"PS256", "PS384", "PS512",
+	"EdDSA",
+}
+
 // TokenManager handles token generation and validation
 type TokenManager struct {
 	db               Database
@@ -76,7 +86,12 @@ func (tm *TokenManager) validateAccessToken(tokenString string) (*TokenInfo, err
 		}
 
 		// If this isn't a token for us, then we should check if it's a JWT token
-		token, err := jwt.Parse(tokenString, tm.keyFunc.Keyfunc, jwt.WithIssuer(tm.trustedIssuer), jwt.WithAudience(tm.trustedAudiences...))
+		token, err := jwt.Parse(tokenString, tm.keyFunc.Keyfunc,
+			jwt.WithValidMethods(asymmetricSigningMethods),
+			jwt.WithIssuer(tm.trustedIssuer),
+			jwt.WithAudience(tm.trustedAudiences...),
+			jwt.WithExpirationRequired(),
+		)
 		if err != nil {
 			return nil, ErrInvalidTokenFormat
 		}
